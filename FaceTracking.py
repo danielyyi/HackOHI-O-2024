@@ -131,6 +131,10 @@ SHOW_ON_SCREEN_DATA = True
 # TOTAL_BLINKS: Counter for the total number of blinks detected.
 TOTAL_BLINKS = 0
 
+TOTAL_SLEEPS = 0
+
+SLEEP_TIME = 0
+
 # EYES_BLINK_FRAME_COUNTER: Counter for consecutive frames with detected potential blinks.
 EYES_BLINK_FRAME_COUNTER = 0
 
@@ -194,6 +198,10 @@ BLINK_THRESHOLD = 0.51  # Threshold for the eye aspect ratio to trigger a blink
 EYE_AR_CONSEC_FRAMES = (
     2  # Number of consecutive frames below the threshold to confirm a blink
 )
+
+#Score of the driver
+SCORE = 100
+
 # SERVER_ADDRESS: Tuple containing the SERVER_IP and SERVER_PORT for UDP communication.
 SERVER_ADDRESS = (SERVER_IP, SERVER_PORT)
 
@@ -400,15 +408,9 @@ if not os.path.exists(LOG_FOLDER):
 # Column names for CSV file
 column_names = [
     "Timestamp (ms)",
-    "Left Eye Center X",
-    "Left Eye Center Y",
-    "Right Eye Center X",
-    "Right Eye Center Y",
-    "Left Iris Relative Pos Dx",
-    "Left Iris Relative Pos Dy",
-    "Right Iris Relative Pos Dx",
-    "Right Iris Relative Pos Dy",
-    "Total Blink Count",
+    "Blinks",
+    "Sleeps",
+    "Sleep Time",
 ]
 # Add head pose columns if head pose estimation is enabled
 if ENABLE_HEAD_POSE:
@@ -431,7 +433,7 @@ try:
 
         # Flipping the frame for a mirror effect
         # I think we better not flip to correspond with real world... need to make sure later...
-        #frame = cv.flip(frame, 1)
+        frame = cv.flip(frame, 1)
         rgb_frame = cv.cvtColor(frame, cv.COLOR_BGR2RGB)
         img_h, img_w = frame.shape[:2]
         results = mp_face_mesh.process(rgb_frame)
@@ -494,8 +496,12 @@ try:
                 face_looks = "Left"
             elif angle_y > threshold_angle:
                 face_looks = "Right"
-            elif angle_x < -threshold_angle:
+            elif angle_x < -threshold_angle + 10:
                 face_looks = "Down"
+                if SCORE > 0:
+                    SCORE = SCORE - .05
+                else:
+                    SCORE = 0
             elif angle_x > threshold_angle:
                 face_looks = "Up"
             else:
@@ -519,7 +525,7 @@ try:
             p1 = nose_2D_point
             p2 = (
                 int(nose_2D_point[0] + angle_y * 10),
-                int(nose_2D_point[1] - angle_x * 10),
+                int(nose_2D_point[1] - angle_x * 10)
             )
 
             cv.line(frame, p1, p2, (255, 0, 255), 3)
@@ -530,6 +536,12 @@ try:
             # count the number of frame frame while eyes are closed.
             if eyes_aspect_ratio <= BLINK_THRESHOLD:
                 EYES_BLINK_FRAME_COUNTER += 1
+                if EYES_BLINK_FRAME_COUNTER >= 60:
+                    SLEEP_TIME += 1
+                    if SCORE > 0:
+                        SCORE = SCORE - 0.1
+                    else:
+                        SCORE = 0
             # else check if eyes are closed is greater EYE_AR_CONSEC_FRAMES frame then
             # count the this as a blink
             # make frame counter equal to zero
@@ -537,6 +549,12 @@ try:
             else:
                 if EYES_BLINK_FRAME_COUNTER > EYE_AR_CONSEC_FRAMES:
                     TOTAL_BLINKS += 1
+                if EYES_BLINK_FRAME_COUNTER >= 60:
+                    TOTAL_SLEEPS += 1
+                    SLEEP_TIME += 60
+                    SCORE = SCORE - 6
+                    if SCORE <= 0:
+                        SCORE = 0
                 EYES_BLINK_FRAME_COUNTER = 0
             
             # Display all facial landmarks if enabled
@@ -607,24 +625,18 @@ try:
                 timestamp = int(time.time() * 1000)  # Current timestamp in milliseconds
                 log_entry = [
                     timestamp,
-                    l_cx,
-                    l_cy,
-                    r_cx,
-                    r_cy,
-                    l_dx,
-                    l_dy,
-                    r_dx,
-                    r_dy,
                     TOTAL_BLINKS,
+                    TOTAL_SLEEPS,
+                    math.floor((SLEEP_TIME/30)*10)/10
                 ]  # Include blink count in CSV
-                log_entry = [timestamp, l_cx, l_cy, r_cx, r_cy, l_dx, l_dy, r_dx, r_dy, TOTAL_BLINKS]  # Include blink count in CSV
+                log_entry = [timestamp, TOTAL_BLINKS, TOTAL_SLEEPS, math.floor((SLEEP_TIME/30)*10)/10]  # Include blink count in CSV
                 
                 # Append head pose data if enabled
-                if ENABLE_HEAD_POSE:
-                    log_entry.extend([pitch, yaw, roll])
-                csv_data.append(log_entry)
-                if LOG_ALL_FEATURES:
-                    log_entry.extend([p for point in mesh_points for p in point])
+               # if ENABLE_HEAD_POSE:
+                    #log_entry.extend([pitch, yaw, roll])
+               # csv_data.append(log_entry)
+               # if LOG_ALL_FEATURES:
+                    #log_entry.extend([p for point in mesh_points for p in point])
                 csv_data.append(log_entry)
 
             # Sending data through socket
@@ -644,15 +656,35 @@ try:
                 if IS_RECORDING:
                     cv.circle(frame, (30, 30), 10, (0, 0, 255), -1)  # Red circle at the top-left corner
                 cv.putText(frame, f"Blinks: {TOTAL_BLINKS}", (30, 80), cv.FONT_HERSHEY_DUPLEX, 0.8, (0, 255, 0), 2, cv.LINE_AA)
-                if ENABLE_HEAD_POSE:
-                    cv.putText(frame, f"Pitch: {int(pitch)}", (30, 110), cv.FONT_HERSHEY_DUPLEX, 0.8, (0, 255, 0), 2, cv.LINE_AA)
-                    cv.putText(frame, f"Yaw: {int(yaw)}", (30, 140), cv.FONT_HERSHEY_DUPLEX, 0.8, (0, 255, 0), 2, cv.LINE_AA)
-                    cv.putText(frame, f"Roll: {int(roll)}", (30, 170), cv.FONT_HERSHEY_DUPLEX, 0.8, (0, 255, 0), 2, cv.LINE_AA)
+                cv.putText(frame, f"Sleeps: {TOTAL_SLEEPS}", (30, 110), cv.FONT_HERSHEY_DUPLEX, 0.8, (0, 255, 0), 2, cv.LINE_AA)
+                cv.putText(frame, f"Sleeping time: {math.floor((SLEEP_TIME/30)*10)/10}", (30, 140), cv.FONT_HERSHEY_DUPLEX, 0.8, (0, 255, 0), 2, cv.LINE_AA)
+                cv.putText(frame, f"Score: {math.floor(SCORE*10)/10}", (30, 170), cv.FONT_HERSHEY_DUPLEX, 0.8, (0, 255, 0), 2, cv.LINE_AA)
 
+                overlay = frame.copy() 
+  
+                # Rectangle parameters 
+                x, y, w, h = 10, 10, 650, 500 
+                # A filled rectangle 
+                cv.rectangle(overlay, (x, y), (x+w, y+h), (0, 0, 200), -1)   
+
+                alpha = 0.4  # Transparency factor. 
+
+                # Following line overlays transparent rectangle 
+                # over the image 
+                image_new = cv.addWeighted(overlay, alpha, frame, 1 - alpha, 0) 
+  
+      
+                if ENABLE_HEAD_POSE:
+                    cv.putText(frame, f"Pitch: {int(pitch)}", (30, 200), cv.FONT_HERSHEY_DUPLEX, 0.8, (0, 255, 0), 2, cv.LINE_AA)
+                    cv.putText(frame, f"Yaw: {int(yaw)}", (30, 230), cv.FONT_HERSHEY_DUPLEX, 0.8, (0, 255, 0), 2, cv.LINE_AA)
+                    cv.putText(frame, f"Roll: {int(roll)}", (30, 260), cv.FONT_HERSHEY_DUPLEX, 0.8, (0, 255, 0), 2, cv.LINE_AA)
 
         
         # Displaying the processed frame
-        cv.imshow("Eye Tracking", frame)
+        if(EYES_BLINK_FRAME_COUNTER >= 60):
+            cv.imshow("Eye Tracking", image_new)
+        else:
+            cv.imshow("Eye Tracking", frame)
         # Handle key presses
         key = cv.waitKey(1) & 0xFF
 
